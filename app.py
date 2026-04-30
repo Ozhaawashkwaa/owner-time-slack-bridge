@@ -46,7 +46,7 @@ def health():
 
 @app.route('/slack/events', methods=['POST'])
 def slack_events():
-    """Test sending messages"""
+    """Handle Slack events with deduplication"""
     
     data = request.get_json()
     
@@ -54,15 +54,23 @@ def slack_events():
     if data and data.get('type') == 'url_verification':
         return {'challenge': data['challenge']}
     
-    # Test sending a message for ANY event
+    # Handle messages with deduplication
     if data and data.get('type') == 'event_callback':
-        try:
-            slack_client.chat_postMessage(
-                channel=TIME_TRACKING_CHANNEL,
-                text="🧪 Je reçois tes messages! System fonctionne!"
-            )
-        except Exception as e:
-            print(f"Erreur envoi message: {e}")
+        event = data.get('event', {})
+        
+        # Only respond to actual user messages (not bot messages)
+        if (event.get('type') == 'message' and 
+            not event.get('bot_id') and 
+            not event.get('subtype') and
+            event.get('user')):
+            
+            try:
+                slack_client.chat_postMessage(
+                    channel=event.get('channel'),
+                    text="No active time reconstruction conversation. The morning routine will post the next day's analysis at 7am ET."
+                )
+            except Exception as e:
+                print(f"Error sending message: {e}")
     
     return {'status': 'ok'}
 
