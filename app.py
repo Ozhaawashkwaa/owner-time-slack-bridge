@@ -46,28 +46,25 @@ def health():
 
 @app.route('/slack/events', methods=['POST'])
 def slack_events():
-    """Handle Slack events - simplified"""
+    """Test sending messages"""
     
-    try:
-        data = request.json
-        
-        # ALWAYS respond to URL verification challenge first
-        if data and data.get('type') == 'url_verification':
-            challenge = data.get('challenge', '')
-            return jsonify({"challenge": challenge})
-        
-        # For other events, just say OK for now
-        return jsonify({"status": "ok"})
-        
-    except Exception as e:
-        # If anything fails, still try to handle challenge
+    data = request.get_json()
+    
+    # Handle URL verification
+    if data and data.get('type') == 'url_verification':
+        return {'challenge': data['challenge']}
+    
+    # Test sending a message for ANY event
+    if data and data.get('type') == 'event_callback':
         try:
-            data = request.get_json(force=True)
-            if data and data.get('type') == 'url_verification':
-                return jsonify({"challenge": data.get('challenge', '')})
-        except:
-            pass
-        return jsonify({"error": "failed"}), 500
+            slack_client.chat_postMessage(
+                channel=TIME_TRACKING_CHANNEL,
+                text="🧪 Je reçois tes messages! System fonctionne!"
+            )
+        except Exception as e:
+            print(f"Erreur envoi message: {e}")
+    
+    return {'status': 'ok'}
 
 @app.route('/morning-message', methods=['POST'])
 def receive_morning_message():
