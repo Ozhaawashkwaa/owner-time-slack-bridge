@@ -35,6 +35,117 @@ signature_verifier = SignatureVerifier(SLACK_SIGNING_SECRET)
 # State management (in production, use Redis or database)
 conversation_state = {}
 
+# ─── Block Kit helpers ────────────────────────────────────────────────────────
+
+def post_slack_message(channel, text=None, blocks=None, thread_ts=None):
+    """Post to Slack with Block Kit blocks and a plain-text fallback for notifications."""
+    kwargs = {
+        "channel": channel,
+        "username": "Time Reconstruction Agent",
+        "icon_emoji": ":clock1:",
+    }
+    if text:
+        kwargs["text"] = text
+    if blocks:
+        kwargs["blocks"] = blocks
+    if thread_ts:
+        kwargs["thread_ts"] = thread_ts
+    return slack_client.chat_postMessage(**kwargs)
+
+
+def _split_to_mrkdwn_blocks(text, max_len=2900):
+    """Split long text into mrkdwn section blocks (Slack hard limit: 3000 chars)."""
+    blocks = []
+    paragraphs = text.split("\n\n")
+    current = ""
+    for para in paragraphs:
+        candidate = (current + "\n\n" + para).strip() if current else para
+        if len(candidate) > max_len:
+            if current:
+                blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": current.strip()}})
+            current = para
+        else:
+            current = candidate
+    if current:
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": current.strip()}})
+    return blocks
+
+
+def build_no_active_conversation_blocks():
+    """Block Kit layout for the 'no active conversation' reply."""
+    return [
+        {
+            "type": "header",
+            "text": {"type": "plain_text", "text": "Owner Time Reconstruction", "emoji": True},
+        },
+        {"type": "divider"},
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": (
+                    "No active time reconstruction conversation is currently open.\n\n"
+                    "The morning routine will post the next day's analysis at *7am ET*.\n\n"
+                    "You can also ask me to reopen a specific day once the routine/state layer is connected."
+                ),
+            },
+        },
+    ]
+
+
+def build_morning_message_blocks(date, message, analysis):
+    """
+    Build Block Kit blocks for the morning time reconstruction message.
+
+    The `analysis` dict is provided by routine/slack_bridge_client.py and contains:
+        aw_total_minutes, fit_summary {strong, partial, weak},
+        blocks_count, questions_count, ghost_meetings_count, version
+
+    FUTURE: when the routine passes fully structured sections (proposed_entries,
+    questions list, off-computer data), replace _split_to_mrkdwn_blocks() here
+    with dedicated section/context/input blocks per message section.
+    """
+    aw_min = analysis.get("aw_total_minutes", 0)
+    aw_hrs = f"{aw_min // 60}h{aw_min % 60:02d}"
+    fs = analysis.get("fit_summary", {})
+    summary_line = (
+        f"*AW actif:* {aw_hrs}  |  "
+        f"*Fits:* {fs.get('strong', 0)} strong / {fs.get('partial', 0)} partial / {fs.get('weak', 0)} weak  |  "
+        f"*Blocs:* {analysis.get('blocks_count', '?')}  |  "
+        f"*Questions:* {analysis.get('questions_count', '?')}"
+    )
+
+    blocks = [
+        {
+            "type": "header",
+            "text": {"type": "plain_text", "text": f"Owner Time Reconstruction — {date}", "emoji": True},
+        },
+        {"type": "divider"},
+        {
+            "type": "context",
+            "elements": [{"type": "mrkdwn", "text": summary_line}],
+        },
+        {"type": "divider"},
+    ]
+
+    # Body: Claude-generated message split into mrkdwn section blocks
+    blocks += _split_to_mrkdwn_blocks(message)
+
+    blocks += [
+        {"type": "divider"},
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": "_Réponds à ce message pour continuer. Tape `APPROVE` quand tout est confirmé._",
+            },
+        },
+    ]
+    return blocks
+
+
+# ─── Flask routes ─────────────────────────────────────────────────────────────
+
 @app.route('/health', methods=['GET'])
 def health():
     """Health check endpoint"""
@@ -65,9 +176,10 @@ def slack_events():
             event.get('user')):
             
             try:
-                slack_client.chat_postMessage(
+                post_slack_message(
                     channel=event.get('channel'),
-                    text="No active time reconstruction conversation. The morning routine will post the next day's analysis at 7am ET."
+                    text="No active time reconstruction conversation. The morning routine will post the next day's analysis at 7am ET.",
+                    blocks=build_no_active_conversation_blocks(),
                 )
             except Exception as e:
                 print(f"Error sending message: {e}")
@@ -92,12 +204,14 @@ def receive_morning_message():
             'started_at': datetime.utcnow().isoformat()
         }
         
-        # Post to Slack
-        response = slack_client.chat_postMessage(
+        # Build Block Kit blocks from message + analysis metadata
+        blocks = build_morning_message_blocks(date, message, analysis_data)
+
+        # Post to Slack; plain text is the notification fallback
+        response = post_slack_message(
             channel=TIME_TRACKING_CHANNEL,
-            text=message,
-            username="Time Reconstruction Agent",
-            icon_emoji=":clock1:"
+            text=f"Owner Time Reconstruction — {date}",
+            blocks=blocks,
         )
         
         logging.info(f"Posted morning message for {date}")
@@ -296,13 +410,11 @@ def find_active_conversation():
     return None
 
 def respond_to_slack(message):
-    """Send a message to the Slack channel"""
-    
-    slack_client.chat_postMessage(
+    """Send a message to the Slack channel using mrkdwn blocks."""
+    post_slack_message(
         channel=TIME_TRACKING_CHANNEL,
         text=message,
-        username="Time Reconstruction Agent",
-        icon_emoji=":clock1:"
+        blocks=_split_to_mrkdwn_blocks(message),
     )
 
 if __name__ == '__main__':
