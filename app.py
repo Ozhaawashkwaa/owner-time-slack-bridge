@@ -54,17 +54,45 @@ def post_slack_message(channel, text=None, blocks=None, thread_ts=None):
 
 
 def _md_to_mrkdwn(text):
-    """Convert GitHub markdown to Slack mrkdwn syntax."""
+    """Convert GitHub markdown to Slack mrkdwn syntax.
+
+    Pipe tables are wrapped in ``` code blocks (monospace alignment — Slack has
+    no native table rendering). Bold/headers/dividers are converted outside tables.
+    """
     import re
-    # **bold** → *bold*
-    text = re.sub(r'\*\*(.+?)\*\*', r'*\1*', text, flags=re.DOTALL)
-    # ## Heading / ### Heading → *Heading*
-    text = re.sub(r'^#{1,6}\s+(.+)$', r'*\1*', text, flags=re.MULTILINE)
-    # Standalone --- or === lines → remove (Block Kit dividers handle section breaks)
-    text = re.sub(r'^[-=]{3,}\s*$', '', text, flags=re.MULTILINE)
-    # Collapse 3+ blank lines left by removed --- into a single blank line
-    text = re.sub(r'\n{3,}', '\n\n', text)
-    return text
+
+    # Step 1: wrap consecutive pipe-table lines in ``` code blocks
+    lines = text.split('\n')
+    result_lines = []
+    in_table = False
+    for line in lines:
+        is_table_row = bool(re.match(r'^\s*\|', line))
+        if is_table_row and not in_table:
+            result_lines.append('```')
+            in_table = True
+        elif not is_table_row and in_table:
+            result_lines.append('```')
+            in_table = False
+        result_lines.append(line)
+    if in_table:
+        result_lines.append('```')
+    text = '\n'.join(result_lines)
+
+    # Step 2: apply mrkdwn conversions outside code blocks only;
+    #         inside code blocks, strip ** so they don't appear as literal chars
+    segments = re.split(r'(```[\s\S]*?```)', text)
+    converted = []
+    for i, seg in enumerate(segments):
+        if i % 2 == 1:          # inside code block — strip ** markers only
+            seg = seg.replace('**', '')
+        else:                    # outside code block — full conversion
+            seg = re.sub(r'\*\*(.+?)\*\*', r'*\1*', seg, flags=re.DOTALL)
+            seg = re.sub(r'^#{1,6}\s+(.+)$', r'*\1*', seg, flags=re.MULTILINE)
+            seg = re.sub(r'^[-=]{3,}\s*$', '', seg, flags=re.MULTILINE)
+            seg = re.sub(r'\n{3,}', '\n\n', seg)
+        converted.append(seg)
+
+    return ''.join(converted)
 
 
 def _split_to_mrkdwn_blocks(text, max_len=2900):
