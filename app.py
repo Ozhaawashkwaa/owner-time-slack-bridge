@@ -193,7 +193,8 @@ def build_morning_message_blocks(date, message, analysis):
 def health():
     """Health check endpoint"""
     return jsonify({
-        "status": "healthy", 
+        "status": "healthy",
+        "version": "v1.2-blockkit",
         "timestamp": datetime.utcnow().isoformat(),
         "port": os.environ.get('PORT', 'not-set')
     })
