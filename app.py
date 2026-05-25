@@ -53,8 +53,23 @@ def post_slack_message(channel, text=None, blocks=None, thread_ts=None):
     return slack_client.chat_postMessage(**kwargs)
 
 
+def _md_to_mrkdwn(text):
+    """Convert GitHub markdown to Slack mrkdwn syntax."""
+    import re
+    # **bold** → *bold*
+    text = re.sub(r'\*\*(.+?)\*\*', r'*\1*', text, flags=re.DOTALL)
+    # ## Heading / ### Heading → *Heading*
+    text = re.sub(r'^#{1,6}\s+(.+)$', r'*\1*', text, flags=re.MULTILINE)
+    # Standalone --- or === lines → remove (Block Kit dividers handle section breaks)
+    text = re.sub(r'^[-=]{3,}\s*$', '', text, flags=re.MULTILINE)
+    # Collapse 3+ blank lines left by removed --- into a single blank line
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text
+
+
 def _split_to_mrkdwn_blocks(text, max_len=2900):
-    """Split long text into mrkdwn section blocks (Slack hard limit: 3000 chars)."""
+    """Convert GH markdown → Slack mrkdwn, then split into section blocks (limit: 3000 chars)."""
+    text = _md_to_mrkdwn(text)
     blocks = []
     paragraphs = text.split("\n\n")
     current = ""
